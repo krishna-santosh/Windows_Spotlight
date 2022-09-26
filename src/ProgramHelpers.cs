@@ -36,16 +36,17 @@ namespace Windows_Spotlight
 
                 try
                 {
-                    if (Orientation(file) == 16m / 9m)
+                    switch (Orientation(file))
                     {
-                        File.Copy(file, LANDSCAPE + fileName + ".jpg", false);
-                        imageCount++;
-                    }
+                        case 16m / 9m:
+                            File.Copy(file, LANDSCAPE + fileName + ".jpg", false);
+                            imageCount++;
+                            break;
 
-                    if (Orientation(file) == 9m / 16m)
-                    {
-                        File.Copy(file, PORTRAIT + fileName + ".jpg", false);
-                        imageCount++;
+                        case 9m / 16m:
+                            File.Copy(file, PORTRAIT + fileName + ".jpg", false);
+                            imageCount++;
+                            break;
                     }
                 }
                 catch (IOException)
