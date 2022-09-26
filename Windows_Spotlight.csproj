@@ -75,9 +75,9 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="Constants.cs" />
-    <Compile Include="Program.cs" />
-    <Compile Include="ProgramHelpers.cs" />
+    <Compile Include="src\Constants.cs" />
+    <Compile Include="src\Program.cs" />
+    <Compile Include="src\ProgramHelpers.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
