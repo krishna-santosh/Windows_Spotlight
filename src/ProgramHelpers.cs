@@ -1,7 +1,10 @@
-﻿using System.IO;
-using System.Drawing;
-using static Windows_Spotlight.Constants.Paths;
+﻿using System;
 using System.Diagnostics;
+using System.Drawing;
+using System.IO;
+using System.Reflection;
+
+using static Windows_Spotlight.Constants.Paths;
 
 namespace Windows_Spotlight
 {
@@ -56,7 +59,33 @@ namespace Windows_Spotlight
             }
         }
 
-        internal static void OpenFolder() => Process.Start(DESTINATION);
-    
+        internal static void OpenFolder() 
+        {
+            System.Console.WriteLine($"Opening {DESTINATION}\n");
+            Process.Start(DESTINATION);
+        }
+        
+        internal static string GetVersion()
+        {
+            var assembly = Assembly.GetExecutingAssembly();
+            var fvi = FileVersionInfo.GetVersionInfo(assembly.Location);
+            var version = fvi.FileVersion;
+
+            return version;
+        }
+
+        internal static void Help()
+        {
+            
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"\nWindows Spotlight v{GetVersion()}\n");
+            Console.ResetColor();
+            Console.WriteLine("Usage:\n");
+            Console.WriteLine("\tWindows-Spotlight.exe <option>\n");
+            Console.WriteLine("options:\n\t-O, --open-folder\tTo Open the output folder.");
+            Console.WriteLine("\t-V, --version\t\tReports the version of this tool.");
+            Console.WriteLine("\t-h, --help\t\tHelp Menu.\n");
+            Console.WriteLine("\nProject URL: https://github.com/krishna-santosh/Windows_Spotlight\n");
+        }
     }
 }
