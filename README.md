@@ -7,6 +7,8 @@ This Command Line Tool retrieves Windows Spotlight (lockscreen) Images.
 ```
 winget install Windows-Spotlight
 ```
+OR
+
 - Download the executable from [release](https://github.com/krishna-santosh/Windows_Spotlight/releases/)
 
 ### Usage
