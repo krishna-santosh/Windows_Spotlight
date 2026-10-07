@@ -1,14 +1,29 @@
 # Releasing Windows Spotlight
 
-The v2 release uses version `2.0.0.0` and Git tag `v2.0.0.0`. Keep the assembly
-and file versions in `Properties/AssemblyInfo.cs`, the publish version in
-`Windows_Spotlight.csproj`, the identity in `app.manifest`, and the CLI version
-check in `tests/Program.cs` consistent when preparing future releases.
+Use this procedure for each release. Choose a four-part numeric version in the
+format `MAJOR.MINOR.BUILD.REVISION`; the Git tag must be that version prefixed
+with `v`.
+
+Set the following variables in PowerShell once and reuse them throughout the
+commands below:
+
+```powershell
+$version = Read-Host 'Release version (MAJOR.MINOR.BUILD.REVISION)'
+$tag = "v$version"
+$repositoryUrl = 'https://github.com/krishna-santosh/spotlight-images'
+$packageId = 'Windows-Spotlight.Windows-Spotlight'
+$assetName = 'Windows-Spotlight.exe'
+```
+
+Keep the assembly and file versions in `Properties/AssemblyInfo.cs`, the publish
+version in `Windows_Spotlight.csproj`, the identity in `app.manifest`, and the CLI
+version check in `tests/Program.cs` consistent with `$version`. Review the changes
+and merge them into `main` before tagging.
 
 ## Build and verify
 
-After committing the reviewed changes and merging `dev` into `main`, use a
-Visual Studio Developer PowerShell with the .NET Framework 4.8 targeting pack:
+Use a Visual Studio Developer PowerShell with the targeting pack required by the
+project:
 
 ```powershell
 msbuild Windows_Spotlight.sln /t:Rebuild /p:Configuration=Release
@@ -17,8 +32,8 @@ msbuild Windows_Spotlight.sln /t:Rebuild /p:Configuration=Release
 (Get-FileHash .\bin\Release\Windows-Spotlight.exe -Algorithm SHA256).Hash
 ```
 
-The expected version output is `Windows Spotlight v2.0.0.0`. No NuGet restore is
-required. On a Windows machine with Spotlight images cached, also run:
+Confirm that the reported version matches `$tag`. On a Windows machine with
+Spotlight images cached, also run:
 
 ```powershell
 .\tests\bin\Release\WindowsSpotlight.Tests.exe --system
@@ -30,36 +45,66 @@ terminal. It must run without a UAC prompt.
 
 ## Publish the GitHub release
 
-Create a GitHub release from `main` tagged `v2.0.0.0` on the
-[repository's releases page](https://github.com/krishna-santosh/spotlight-images/releases).
+From an up-to-date `main` checkout containing all release changes, run:
 
-Upload `bin/Release/Windows-Spotlight.exe` as the asset named
-`Windows-Spotlight.exe`. This is the portable command, not a setup/bootstrapper;
-the application uses framework assemblies and does not need
-`System.Drawing.Common.dll`. `Windows-Spotlight.exe.config` can be offered as an
-additional asset for manual downloads; the application targets .NET Framework
-4.8 and does not depend on custom binding redirects.
+```powershell
+git switch main
+git pull --ff-only origin main
+git tag -a $tag -m "Windows Spotlight $tag"
+git push origin $tag
+```
 
-Publish the release before generating the WinGet manifests so WinGetCreate can
-download and hash the final public executable. Do not replace that asset after
-submitting its manifest; changed bytes require a new hash and manifest update.
+Pushing a `v*` tag starts `.github/workflows/release.yml`. The workflow requires
+a four-part numeric tag and checks that the tagged commit belongs to `main`.
+It builds Release and runs the fixture tests, then verifies that the tag matches
+the assembly, file, publish, manifest, and CLI versions. Only after all these
+checks pass does it publish a GitHub release with generated release notes and
+the following assets:
+
+- `Windows-Spotlight.exe`
+- `Windows-Spotlight.exe.config`
+- `SHA256SUMS.txt` (hashes of both files)
+
+The workflow uses the repository's built-in `GITHUB_TOKEN`; no personal access
+token is needed. If repository policy restricts Actions write permissions, allow
+the release job's `contents: write` permission. Follow the run on the Actions tab
+and verify the published release and its assets.
+
+To preview the assets locally after a Release build, without publishing:
+
+```powershell
+.\scripts\Prepare-Release.ps1 -Tag $tag
+```
+
+This writes the same three files into the ignored `artifacts/release` directory.
+
+Run the system smoke test locally before pushing the tag: GitHub-hosted runners
+do not have your Spotlight cache. Do not overwrite published release assets on a
+workflow rerun. If the release already exists, review it before retrying;
+`gh release create` fails rather than replacing it. Ship changed binaries under
+a new version and tag.
+
+Wait for the release workflow to succeed before generating the WinGet manifests
+so WinGetCreate can download and hash the final public executable. WinGet
+submission remains a separate, manual step.
 
 ## Update the existing WinGet package
 
-Keep the existing package ID: `Windows-Spotlight.Windows-Spotlight`. Install
-WinGetCreate, then generate the updated manifests without submitting yet:
+Keep the existing package ID. Install WinGetCreate if needed, then generate the
+updated manifests without submitting yet:
 
 ```powershell
 winget install --exact --id Microsoft.WingetCreate --scope user
-$releaseUrl = 'https://github.com/krishna-santosh/spotlight-images/releases/download/v2.0.0.0/Windows-Spotlight.exe'
-wingetcreate update Windows-Spotlight.Windows-Spotlight --version 2.0.0.0 --urls "$releaseUrl|neutral" --out .\winget-manifests
+$releaseUrl = "$repositoryUrl/releases/download/$tag/$assetName"
+wingetcreate update $packageId --version $version --urls "$releaseUrl|neutral" --out .\winget-manifests
 ```
 
-The architecture override keeps the existing `neutral` architecture for this
-AnyCPU executable. Review the generated version, default-locale, and installer
-YAML files. Confirm the new URL and SHA-256, `InstallerType: portable`, and
-`Commands: [Windows-Spotlight]`. Update the description to mention both lock-screen
-and desktop exports and use the current repository URLs.
+The `neutral` override matches the project's AnyCPU build. If the distribution
+architecture changes, update the override and installer metadata accordingly.
+Review the generated version, default-locale, and installer YAML files. Confirm
+the version, release URL, SHA-256, installer type, architecture, and command
+alias. Update descriptions, release notes, and repository links as needed to
+reflect the release.
 
 Do not add installer switches for this portable EXE. WinGet controls installation
 itself. A `Scope: user` manifest field does not enforce user scope for portable
@@ -71,7 +116,7 @@ Set `$manifestDir` to the generated directory containing the three YAML files
 (normally the following path):
 
 ```powershell
-$manifestDir = '.\winget-manifests\manifests\w\Windows-Spotlight\Windows-Spotlight\2.0.0.0'
+$manifestDir = ".\winget-manifests\manifests\w\Windows-Spotlight\Windows-Spotlight\$version"
 winget validate --manifest $manifestDir
 ```
 
@@ -90,10 +135,8 @@ winget install --manifest $manifestDir --scope user
 ```
 
 Open a new terminal and check `Windows-Spotlight --version`, `--help`, an export,
-a repeat export, and uninstall/reinstall. Test upgrading a user-scope v1 install
-as well. Existing machine-scope installs retain their scope on upgrade; migrating
-those users requires uninstalling the old machine install, then installing with
-`--scope user`.
+a repeat export, and uninstall/reinstall. Also test upgrading from a previously
+published version using the supported installation scopes.
 
 ## Submit to the community repository
 
@@ -105,12 +148,14 @@ wingetcreate submit $manifestDir
 
 This creates a pull request in `microsoft/winget-pkgs`. If GitHub authentication
 is unavailable, fork that repository and submit the generated files under
-`manifests/w/Windows-Spotlight/Windows-Spotlight/2.0.0.0/` manually. Keep the v1
-manifests. Respond to validation/reviewer feedback and wait for the PR to merge
-and the source to refresh. Users can then install with:
+the existing package's manifest path in a new directory named `$version`
+manually. Keep previously published version directories. Respond to validation
+and reviewer feedback and wait for the PR to merge and the source to refresh.
+Verify availability with:
 
 ```powershell
-winget install --exact --id Windows-Spotlight.Windows-Spotlight --scope user
+winget show --exact --id $packageId --version $version
+winget install --exact --id $packageId --scope user
 ```
 
 Official references: [WinGetCreate update](https://github.com/microsoft/winget-create/blob/main/doc/update.md),
