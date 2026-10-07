@@ -1,4 +1,6 @@
 using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
 using static Windows_Spotlight.ProgramHelpers;
 
 namespace Windows_Spotlight
@@ -7,64 +9,56 @@ namespace Windows_Spotlight
     {
         private static int Main(string[] args)
         {
-            bool open = false;
-            ImageSource source = ImageSource.LockScreen;
-            for (int i = 0; i < args.Length; i++)
+            CliOptions options;
+            string error;
+            if (!CliOptions.TryParse(args, out options, out error))
             {
-                switch (args[i])
-                {
-                    case "-V":
-                    case "--version":
-                        Console.WriteLine("Windows Spotlight v{0}", GetVersion());
-                        return 0;
-                    case "-O":
-                    case "--open-folder":
-                        open = true;
-                        break;
-                    case "-h":
-                    case "--help":
-                        Help();
-                        return 0;
-                    case "--source":
-                        if (++i >= args.Length || !TrySource(args[i], out source))
-                        {
-                            Console.Error.WriteLine("--source requires lockscreen, desktop, or all.");
-                            return 1;
-                        }
-                        break;
-                    default:
-                        Console.Error.WriteLine("Unknown option: {0}", args[i]);
-                        Help();
-                        return 1;
-                }
+                Console.Error.WriteLine("Error: {0}", error);
+                Console.Error.WriteLine("Run Windows-Spotlight.exe --help for usage and examples.");
+                return 1;
             }
+            if (options.Help) { Help(); return 0; }
+            if (options.Version) { Console.WriteLine("Windows Spotlight v{0}", GetVersion()); return 0; }
             try
             {
-                var catalog = new SpotlightCatalog(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
-                ExportResult result = ImageExporter.Export(catalog, source, Constants.Paths.DESTINATION);
-                Console.WriteLine(result.Saved > 0 ? $"Got {result.Saved} new images." : "No new images found.");
-                if (result.Duplicates > 0) Console.WriteLine("Skipped {0} existing images.", result.Duplicates);
-                if (result.Failed > 0) Console.Error.WriteLine("Could not export {0} images.", result.Failed);
-                if (open) OpenFolder();
-                return result.Failed == 0 ? 0 : 1;
+                if (options.Startup != null)
+                    return new StartupManager(new WindowsTaskScheduler()).Execute(options.Startup, options.Source);
+                using (var gate = new ExportGate())
+                {
+                    if (!gate.Acquired)
+                    {
+                        Console.WriteLine("An image export is already running. Try again shortly.");
+                        return 0;
+                    }
+                    if (options.Background)
+                        return BackgroundLog.Run(StartupManager.LogPath, () => Export(options));
+                    return Export(options);
+                }
             }
-            catch (Exception ex) when (SpotlightCatalog.IsReadError(ex) || ex is System.ComponentModel.Win32Exception)
+            catch (Exception ex) when (IsOperationalError(ex))
             {
-                Console.Error.WriteLine(ex.Message);
+                Console.Error.WriteLine("Error: {0}", ex.Message);
+                if (options.Startup != null)
+                    Console.Error.WriteLine("Could not manage the startup task. Check Task Scheduler availability and your account's permissions, then try again.");
                 return 1;
             }
         }
 
-        private static bool TrySource(string value, out ImageSource source)
+        private static int Export(CliOptions options)
         {
-            source = ImageSource.LockScreen;
-            switch (value.ToLowerInvariant())
-            {
-                case "lockscreen": return true;
-                case "desktop": source = ImageSource.Desktop; return true;
-                case "all": source = ImageSource.All; return true;
-                default: return false;
-            }
+            Console.WriteLine("Source: {0}", SourceLabel(options.Source));
+            Console.WriteLine("Output: {0}", Constants.Paths.DESTINATION);
+            var catalog = new SpotlightCatalog(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+            ExportResult result = ImageExporter.Export(catalog, options.Source, Constants.Paths.DESTINATION);
+            WriteExportResult(result, Console.Out, Console.Error);
+            if (options.OpenFolder) OpenFolder();
+            return result.Failed == 0 ? 0 : 1;
+        }
+
+        internal static bool IsOperationalError(Exception ex)
+        {
+            return SpotlightCatalog.IsReadError(ex) || ex is Win32Exception || ex is COMException
+                || ex is InvalidOperationException || ex is NotSupportedException || ex is System.Xml.XmlException;
         }
     }
 }

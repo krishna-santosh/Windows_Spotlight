@@ -76,6 +76,9 @@
   <ItemGroup>
     <Compile Include="src\Constants.cs" />
     <Compile Include="src\Program.cs" />
+    <Compile Include="src\CliOptions.cs" />
+    <Compile Include="src\StartupTask.cs" />
+    <Compile Include="src\BackgroundLog.cs" />
     <Compile Include="src\ProgramHelpers.cs" />
     <Compile Include="src\SpotlightCatalog.cs" />
     <Compile Include="src\JpegMetadata.cs" />
@@ -99,4 +102,23 @@
     </BootstrapperPackage>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <ItemGroup>
+    <EmbeddedResource Include="$(IntermediateOutputPath)Windows-Spotlight.Background.exe">
+      <LogicalName>Windows_Spotlight.Background.exe</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+  <!-- Embed a windowless build of the same app, preserving the portable console CLI. -->
+  <Target Name="BuildBackgroundApp" BeforeTargets="PrepareResourceNames" DependsOnTargets="ResolveReferences"
+          Inputs="@(Compile);$(ApplicationManifest);$(MSBuildProjectFullPath)" Outputs="$(IntermediateOutputPath)Windows-Spotlight.Background.exe">
+    <Csc Sources="@(Compile)" References="@(ReferencePath)"
+         OutputAssembly="$(IntermediateOutputPath)Windows-Spotlight.Background.exe"
+         TargetType="winexe" MainEntryPoint="Windows_Spotlight.Program"
+         Win32Manifest="$(ApplicationManifest)" Optimize="true" Deterministic="true"
+         UseSharedCompilation="$(UseSharedCompilation)" />
+  </Target>
+  <Target Name="TrackBackgroundApp" BeforeTargets="CoreCompile" DependsOnTargets="BuildBackgroundApp">
+    <ItemGroup>
+      <FileWrites Include="$(IntermediateOutputPath)Windows-Spotlight.Background.exe" />
+    </ItemGroup>
+  </Target>
 </Project>

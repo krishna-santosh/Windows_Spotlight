@@ -52,7 +52,7 @@ namespace Windows_Spotlight
                 catch (Exception ex) when (SpotlightCatalog.IsReadError(ex) || ex is ArgumentException || ex is System.Runtime.InteropServices.ExternalException)
                 {
                     result.Failed++;
-                    Console.Error.WriteLine("Could not export {0}: {1}", Path.GetFileName(candidate.Path), ex.Message);
+                    Console.Error.WriteLine("Error: Could not save {0}: {1}", Path.GetFileName(candidate.Path), ex.Message);
                 }
             }
             return result;
@@ -75,7 +75,7 @@ namespace Windows_Spotlight
                 }
                 catch (Exception ex) when (SpotlightCatalog.IsReadError(ex))
                 {
-                    Console.Error.WriteLine("Could not check existing image {0}: {1}", Path.GetFileName(file), ex.Message);
+                    Console.Error.WriteLine("Warning: Could not check saved image {0}: {1}", Path.GetFileName(file), ex.Message);
                 }
             }
             return hashes;

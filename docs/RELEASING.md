@@ -10,7 +10,7 @@ commands below:
 ```powershell
 $version = Read-Host 'Release version (MAJOR.MINOR.BUILD.REVISION)'
 $tag = "v$version"
-$repositoryUrl = 'https://github.com/krishna-santosh/spotlight-images'
+$repositoryUrl = 'https://github.com/krishna-santosh/Windows_Spotlight'
 $packageId = 'Windows-Spotlight.Windows-Spotlight'
 $assetName = 'Windows-Spotlight.exe'
 ```
@@ -37,11 +37,17 @@ Spotlight images cached, also run:
 
 ```powershell
 .\tests\bin\Release\WindowsSpotlight.Tests.exe --system
+.\tests\bin\Release\WindowsSpotlight.Tests.exe --scheduler
 ```
 
 The system test writes only to its test output directory and removes its exports
 afterward. Check the portable executable from a normal, non-administrator
 terminal. It must run without a UAC prompt.
+The scheduler check creates a unique temporary task, runs the embedded
+windowless executable with `--version`, and removes the task. Check the updated
+`--help` output too. The portable executable embeds the background app; no extra
+release asset is needed. Users with startup enabled should run `--startup enable`
+again after upgrading to refresh their background copy.
 
 ## Publish the GitHub release
 

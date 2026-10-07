@@ -17,11 +17,15 @@ internal static class Tests
 
     private static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--probe-gate")
+            using (var gate = new ExportGate(args[1])) return gate.Acquired ? 0 : 2;
         string root = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "fixtures", Guid.NewGuid().ToString("N")));
         Directory.CreateDirectory(root);
         try
         {
             Run(root);
+            CheckStartup(Path.Combine(root, "startup with spaces & unicode 海"));
+            if (args.Contains("--scheduler")) CheckScheduler(Path.Combine(root, "scheduler with spaces & unicode 海"));
             if (args.Contains("--system")) CheckSystem(Path.Combine(root, "system"));
             Console.WriteLine("PASS: {0} checks", checks);
             return 0;
@@ -175,6 +179,165 @@ internal static class Tests
         CheckCli("--source", 1, "requires");
         CheckCli("--source bogus", 1, "requires");
         CheckCli("--bogus", 1, "Unknown option");
+        CheckCli("--startup", 1, "requires enable, disable, or status");
+        CheckCli("--startup bogus", 1, "requires enable, disable, or status");
+        CheckCli("--startup enable --open-folder", 1, "cannot be combined");
+        CheckCli("--source all --startup status", 1, "--startup enable");
+        CheckCli("--startup disable --source desktop", 1, "--startup enable");
+        CheckCli("--startup enable --startup disable", 1, "only once");
+        CheckCli("--source all --source desktop", 1, "only once");
+        CheckCli("--background --open-folder", 1, "cannot open");
+        CheckCli("--startup enable --help", 0, "Startup is opt-in");
+        CheckCli("--source --help", 0, "Examples:");
+        CheckCli("--help", 0, "--startup status");
+    }
+
+    private sealed class FakeScheduler : IStartupScheduler
+    {
+        internal StartupStatus Status;
+        internal int Registrations;
+        internal string Name;
+        internal string User;
+        internal bool FailRegistration;
+        public StartupStatus Get(string name) { Name = name; return Status; }
+        public void Register(string name, string xml, string userId)
+        {
+            if (FailRegistration) throw new System.Runtime.InteropServices.COMException("Registration denied");
+            Registrations++;
+            Name = name;
+            User = userId;
+            Status = new StartupStatus { Enabled = true, Xml = xml };
+        }
+        public bool Delete(string name)
+        {
+            Name = name;
+            bool existed = Status != null;
+            Status = null;
+            return existed;
+        }
+    }
+
+    private static string Capture(Action action)
+    {
+        TextWriter output = Console.Out;
+        TextWriter errors = Console.Error;
+        using (var capture = new StringWriter())
+        {
+            try { Console.SetOut(capture); Console.SetError(capture); action(); return capture.ToString(); }
+            finally { Console.SetOut(output); Console.SetError(errors); }
+        }
+    }
+
+    private static void CheckStartup(string root)
+    {
+        CliOptions options;
+        string error;
+        Check(CliOptions.TryParse(new string[0], out options, out error) && options.Source == ImageSource.LockScreen, "manual source default remains lockscreen");
+        Check(CliOptions.TryParse(new[] { "--startup", "enable" }, out options, out error) && options.Source == ImageSource.All, "startup defaults to both sources");
+        Check(CliOptions.TryParse(new[] { "--source", "desktop", "--startup", "enable" }, out options, out error) && options.Source == ImageSource.Desktop, "startup respects source before command");
+        Check(CliOptions.TryParse(new[] { "--startup", "enable", "--source", "LOCKSCREEN" }, out options, out error) && options.Source == ImageSource.LockScreen, "startup respects source after command");
+
+        var scheduler = new FakeScheduler();
+        var manager = new StartupManager(scheduler, root, "S-1-5-21-1234");
+        string output = Capture(() => Check(manager.Execute("status", ImageSource.All) == 0, "disabled status succeeds"));
+        Check(output.Contains("Startup: Disabled") && !Directory.Exists(root) && scheduler.Registrations == 0, "status is read-only and startup is opt-in");
+        output = Capture(() => Check(manager.Execute("enable", ImageSource.All) == 0, "enable succeeds"));
+        Check(output.Contains("Startup enabled") && File.Exists(manager.WorkerPath), "enable stages embedded worker and confirms configuration");
+        Check(scheduler.User == "S-1-5-21-1234" && scheduler.Name == "Windows-Spotlight-S-1-5-21-1234", "task identity is per user");
+        byte[] worker = File.ReadAllBytes(manager.WorkerPath);
+        int pe = BitConverter.ToInt32(worker, 0x3c);
+        Check(BitConverter.ToUInt16(worker, pe + 24 + 68) == 2, "background worker uses the windowless Windows GUI subsystem");
+        byte[] cli = File.ReadAllBytes(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Windows-Spotlight.exe"));
+        Check(BitConverter.ToUInt16(cli, BitConverter.ToInt32(cli, 0x3c) + 24 + 68) == 3, "interactive CLI retains the console subsystem");
+        Check(File.Exists(manager.WorkerPath + ".config"), "worker runtime configuration staged");
+
+        XNamespace ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
+        XDocument task = XDocument.Parse(scheduler.Status.Xml);
+        Check(task.Descendants(ns + "Delay").Single().Value == "PT1M" && task.Descendants(ns + "Interval").Single().Value == "PT1H"
+            && !task.Descendants(ns + "Duration").Any(), "delayed sign-in task repeats hourly indefinitely");
+        Check(task.Descendants(ns + "UserId").All(e => e.Value == scheduler.User)
+            && task.Descendants(ns + "LogonType").Single().Value == "InteractiveToken"
+            && task.Descendants(ns + "RunLevel").Single().Value == "LeastPrivilege", "task uses the signed-in user without elevation or password");
+        Check(task.Descendants(ns + "Command").Single().Value == manager.WorkerPath
+            && task.Descendants(ns + "WorkingDirectory").Single().Value == root, "XML preserves spaces, Unicode and metacharacters without shell quoting");
+        Check(task.Descendants(ns + "Arguments").Single().Value == "--background --source all", "task exports both sources silently");
+        Check(task.Descendants(ns + "MultipleInstancesPolicy").Single().Value == "IgnoreNew"
+            && task.Descendants(ns + "WakeToRun").Single().Value == "false"
+            && task.Descendants(ns + "DisallowStartIfOnBatteries").Single().Value == "false"
+            && task.Descendants(ns + "RunOnlyIfNetworkAvailable").Single().Value == "false", "task avoids overlap, wakes and unnecessary power/network restrictions");
+
+        DateTime modified = File.GetLastWriteTimeUtc(manager.WorkerPath);
+        Capture(() => manager.Execute("enable", ImageSource.Desktop));
+        Check(scheduler.Registrations == 2 && File.GetLastWriteTimeUtc(manager.WorkerPath) == modified, "re-enabling updates a single task without rewriting an unchanged worker");
+        output = Capture(() => manager.Execute("status", ImageSource.All));
+        Check(output.Contains("Source: Desktop") && output.Contains("Not run yet") && !output.Contains("Action needed"), "status reads configured source and recognizes never-run tasks");
+        scheduler.Status.LastRun = new DateTime(2026, 10, 7, 12, 0, 0);
+        scheduler.Status.NextRun = scheduler.Status.LastRun.AddHours(1);
+        scheduler.Status.LastResult = 1;
+        output = Capture(() => manager.Execute("status", ImageSource.All));
+        Check(output.Contains("Failed; see the background log") && output.Contains("2026-10-07 13:00:00"), "status exposes failure and next run");
+        scheduler.Status.LastResult = 0x80070002;
+        Check(Capture(() => manager.Execute("status", ImageSource.All)).Contains("0x80070002"), "scheduler errors preserve their diagnostic code");
+        File.WriteAllText(manager.WorkerPath, "stale worker");
+        Check(Capture(() => manager.Execute("status", ImageSource.All)).Contains("refresh"), "status detects outdated background app");
+        Capture(() => manager.Execute("enable", ImageSource.LockScreen));
+        Check(File.ReadAllBytes(manager.WorkerPath).SequenceEqual(worker), "re-enabling repairs the background app");
+        File.Delete(manager.WorkerPath);
+        Check(Capture(() => manager.Execute("status", ImageSource.All)).Contains("missing"), "status diagnoses a missing background app");
+        Capture(() => manager.Execute("enable", ImageSource.All));
+        scheduler.FailRegistration = true;
+        string previousXml = scheduler.Status.Xml;
+        bool rejected = false;
+        try { Capture(() => manager.Execute("enable", ImageSource.Desktop)); }
+        catch (System.Runtime.InteropServices.COMException) { rejected = true; }
+        Check(rejected && scheduler.Status.Xml == previousXml, "registration errors propagate without a false success or lost task");
+        output = Capture(() => manager.Execute("disable", ImageSource.All));
+        Check(scheduler.Status == null && output.Contains("Startup disabled"), "disable removes the task");
+        Check(Capture(() => manager.Execute("disable", ImageSource.All)).Contains("already disabled"), "disable is idempotent");
+
+        using (var process = Process.Start(new ProcessStartInfo(manager.WorkerPath, "--version")
+            { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true }))
+        {
+            string version = process.StandardOutput.ReadToEnd();
+            string errors = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            Check(process.ExitCode == 0 && version.Contains("Windows Spotlight v2.0.0.0") && errors.Length == 0, "embedded windowless app runs with redirected output");
+        }
+
+        string log = Path.Combine(root, "startup.log");
+        TextWriter originalOutput = Console.Out;
+        TextWriter originalErrors = Console.Error;
+        Check(BackgroundLog.Run(log, () => { Console.WriteLine("Saved fixture image."); Console.Error.WriteLine("Fixture warning."); return 0; }) == 0, "background log preserves success exit code");
+        string logged = File.ReadAllText(log);
+        Check(logged.Contains("Saved fixture image.") && logged.Contains("Fixture warning.") && logged.Contains("Exit code: 0"), "background log captures both streams and run result");
+        Check(object.ReferenceEquals(Console.Out, originalOutput) && object.ReferenceEquals(Console.Error, originalErrors), "background logging restores console streams");
+        Check(BackgroundLog.Run(log, () => { throw new IOException("Fixture export failure"); }) == 1
+            && File.ReadAllText(log).Contains("Fixture export failure"), "background failures are logged and return nonzero");
+        File.WriteAllBytes(log, new byte[BackgroundLog.MaxBytes]);
+        BackgroundLog.Run(log, () => 0);
+        Check(File.Exists(log + ".1") && new FileInfo(log + ".1").Length == BackgroundLog.MaxBytes && new FileInfo(log).Length < BackgroundLog.MaxBytes, "background log rotates at one MiB");
+        File.WriteAllBytes(log, new byte[BackgroundLog.MaxBytes + 1]);
+        BackgroundLog.Run(log, () => 0);
+        Check(new FileInfo(log + ".1").Length == BackgroundLog.MaxBytes + 1, "rotation replaces the single previous log");
+
+        string gateName = @"Local\Windows-Spotlight-Test-" + Guid.NewGuid().ToString("N");
+        using (var gate = new ExportGate(gateName))
+        {
+            Check(gate.Acquired, "first export acquires the gate");
+            using (var process = Process.Start(new ProcessStartInfo(System.Reflection.Assembly.GetExecutingAssembly().Location, "--probe-gate " + gateName)
+                { UseShellExecute = false, CreateNoWindow = true }))
+            {
+                Check(process.WaitForExit(10000) && process.ExitCode == 2, "a second process cannot export concurrently");
+            }
+        }
+        using (var gate = new ExportGate(gateName)) Check(gate.Acquired, "export gate is released after completion");
+
+        string summary = Capture(() => ProgramHelpers.WriteExportResult(new ExportResult { Saved = 1, Duplicates = 1, Failed = 1 }, Console.Out, Console.Error));
+        Check(summary.Contains("Saved 1 new image.") && summary.Contains("Skipped 1 image") && summary.Contains("Error: Could not save 1 image."), "export output uses clear singular counts and reports partial failures");
+        summary = Capture(() => ProgramHelpers.WriteExportResult(new ExportResult(), Console.Out, Console.Error));
+        Check(summary.Contains("No eligible cached images") && summary.Contains("Windows Settings"), "empty-cache output provides an actionable explanation");
+        summary = Capture(() => ProgramHelpers.WriteExportResult(new ExportResult { Duplicates = 2 }, Console.Out, Console.Error));
+        Check(summary.Contains("already saved") && !summary.Contains("No eligible"), "duplicate-only output distinguishes saved images from an empty cache");
     }
 
     private static void CheckSystem(string destination)
@@ -188,6 +351,58 @@ internal static class Tests
         Check(files.Select(p => JpegMetadata.ReadOriginalHash(File.ReadAllBytes(p))).Distinct().Count() == files.Length, "real export has unique embedded original hashes");
         Console.WriteLine("System smoke test: {0} images, {1} repeat duplicates, named examples: {2}", first.Saved, second.Duplicates,
             string.Join(", ", files.Where(p => Path.GetFileNameWithoutExtension(p).Length != 64).Take(4).Select(Path.GetFileName)));
+    }
+
+    private static void CheckScheduler(string root)
+    {
+        string userId = System.Security.Principal.WindowsIdentity.GetCurrent().User.Value;
+        string taskName = "Windows-Spotlight-Test-" + Guid.NewGuid().ToString("N");
+        var scheduler = new WindowsTaskScheduler();
+        var manager = new StartupManager(scheduler, root, userId, taskName);
+        manager.InstallWorker();
+        XNamespace ns = "http://schemas.microsoft.com/windows/2004/02/mit/task";
+        XDocument xml = XDocument.Parse(StartupManager.BuildXml(userId, manager.WorkerPath, ImageSource.All));
+        // Never export into the user's Pictures folder during scheduler verification.
+        xml.Descendants(ns + "Arguments").Single().Value = "--version";
+        object service = null;
+        object folder = null;
+        object task = null;
+        object running = null;
+        bool registeredTask = false;
+        try
+        {
+            Check(scheduler.Get(taskName) == null, "temporary scheduler task does not already exist");
+            scheduler.Register(taskName, xml.ToString(), userId);
+            registeredTask = true;
+            StartupStatus status = scheduler.Get(taskName);
+            Check(status != null && status.Enabled, "real Task Scheduler accepts the delayed hourly task XML");
+            XDocument registered = XDocument.Parse(status.Xml);
+            Check(registered.Descendants(ns + "Command").Single().Value == manager.WorkerPath
+                && registered.Descendants(ns + "Interval").Single().Value == "PT1H", "scheduler preserves worker path and repetition interval");
+            service = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service", true));
+            ((dynamic)service).Connect();
+            folder = ((dynamic)service).GetFolder(@"\");
+            task = ((dynamic)folder).GetTask(taskName);
+            running = ((dynamic)task).Run(null);
+            var timer = Stopwatch.StartNew();
+            do
+            {
+                System.Threading.Thread.Sleep(100);
+                status = scheduler.Get(taskName);
+            } while (timer.ElapsedMilliseconds < 10000 && (status.LastRun.Year < 2000 || status.Running));
+            Check(status.LastRun.Year >= 2000 && !status.Running && status.LastResult == 0, "Task Scheduler launches the embedded windowless worker successfully");
+            Check(scheduler.Delete(taskName) && scheduler.Get(taskName) == null, "real Task Scheduler removes the temporary task");
+            registeredTask = false;
+            Check(!scheduler.Delete(taskName), "removing an absent real scheduler task is harmless");
+        }
+        finally
+        {
+            WindowsTaskScheduler.Release(running);
+            WindowsTaskScheduler.Release(task);
+            WindowsTaskScheduler.Release(folder);
+            WindowsTaskScheduler.Release(service);
+            if (registeredTask) scheduler.Delete(taskName);
+        }
     }
 
     private static void CheckCli(string arguments, int exit, string text)
