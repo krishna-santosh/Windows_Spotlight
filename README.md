@@ -1,15 +1,29 @@
 # Windows_Spotlight
 
-This Command Line Tool retrieves Windows Spotlight (lockscreen) Images.
+This command-line tool exports cached Windows Spotlight lock-screen and desktop images.
 
 ### Installation 
-- Using Winget
+- Using WinGet from a normal terminal (no administrator privileges):
 ```
-winget install Windows-Spotlight
+winget install --exact --id Windows-Spotlight.Windows-Spotlight --scope user
 ```
-OR
 
-- Download the executable from [release](https://github.com/krishna-santosh/Windows_Spotlight/releases/)
+Use an up-to-date App Installer / WinGet. User-scope installation places the
+portable executable under `%LOCALAPPDATA%\Microsoft\WinGet\Packages` and updates
+your user PATH; open a new terminal after installation. Developer Mode is not
+required: WinGet can add the package directory to PATH when it cannot create a
+command symlink. Older WinGet versions had problems with this fallback.
+
+An existing machine-wide installation retains its scope during upgrades. To
+switch to user scope, uninstall that installation first (this may require admin
+rights), then install with the command above. Your exported Pictures are outside
+the installation directory.
+
+Alternatively, download `Windows-Spotlight.exe` from the
+[releases](https://github.com/krishna-santosh/spotlight-images/releases), save it in
+a folder you own, and run it directly. The application runs with your existing
+permissions and requires .NET Framework 4.8, which is included on current Windows
+11 systems.
 
 ### Usage
 Run the following command in the terminal (CMD/PowerShell/Gitbash)
@@ -66,14 +80,17 @@ Windows-Spotlight.exe --help
 
 ### Build and verify
 
-Build with Visual Studio / MSBuild and the .NET Framework 4.8 targeting pack:
+Build with Visual Studio / MSBuild and the .NET Framework 4.8 targeting pack.
+There are no external NuGet dependencies:
 
 ```
-msbuild Windows_Spotlight.csproj /p:Configuration=Release
-msbuild tests\WindowsSpotlight.Tests.csproj /p:Configuration=Release
+msbuild Windows_Spotlight.sln /p:Configuration=Release
 tests\bin\Release\WindowsSpotlight.Tests.exe
 ```
 
-The tests use generated fixtures and do not modify the user's Spotlight caches or
-Pictures folder. Add `--system` to also verify actual cached images, exporting
+The fixture tests use generated images and metadata and do not read the user's
+Spotlight registry or caches or modify Pictures. CI builds the solution and runs
+these tests. Add `--system` to also verify actual cached images, exporting
 only into a temporary test output directory that is removed afterward.
+
+For release packaging and WinGet submission, see [the release guide](docs/RELEASING.md).

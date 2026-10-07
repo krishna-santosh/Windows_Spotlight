@@ -1,0 +1,21 @@
+name: Build and test
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: microsoft/setup-msbuild@v3
+      - name: Build Release
+        run: msbuild Windows_Spotlight.sln /p:Configuration=Release /p:UseSharedCompilation=false /m /nologo
+      - name: Run fixture tests
+        run: .\tests\bin\Release\WindowsSpotlight.Tests.exe

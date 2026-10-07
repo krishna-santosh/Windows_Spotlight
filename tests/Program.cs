@@ -64,7 +64,7 @@ internal static class Tests
         File.WriteAllText(Path.Combine(rawCache, "older"), Json.Serialize(raw));
 
         string destination = Path.Combine(root, "exports");
-        var catalog = new SpotlightCatalog(local);
+        var catalog = new SpotlightCatalog(local, includeDesktopRegistry: false);
         var initial = ImageExporter.Export(catalog, ImageSource.LockScreen, destination);
         Check(initial.Saved == 3 && initial.Failed == 0, "export landscape, portrait and older cached image");
         string[] output = Directory.GetFiles(destination, "*.jpg", SearchOption.AllDirectories);
@@ -86,16 +86,16 @@ internal static class Tests
         }
         Check(!Directory.GetFiles(destination, "*", SearchOption.AllDirectories).Any(p => !p.EndsWith(".jpg")), "no index, sidecars or temporary files");
         File.Move(output[0], Path.Combine(Path.GetDirectoryName(output[0]), "user-renamed.jpg"));
-        var repeat = ImageExporter.Export(new SpotlightCatalog(local), ImageSource.LockScreen, destination);
+        var repeat = ImageExporter.Export(new SpotlightCatalog(local, includeDesktopRegistry: false), ImageSource.LockScreen, destination);
         Check(repeat.Saved == 0 && repeat.Duplicates == 3, "repeat run skips duplicates after a rename");
         File.Copy(first, Path.Combine(assets, "different-source-id"));
-        var alternate = ImageExporter.Export(new SpotlightCatalog(local), ImageSource.LockScreen, destination);
+        var alternate = ImageExporter.Export(new SpotlightCatalog(local, includeDesktopRegistry: false), ImageSource.LockScreen, destination);
         Check(alternate.Saved == 0 && alternate.Duplicates == 4, "new random IDs do not cause duplicates");
 
         string legacy = Path.Combine(root, "legacy");
         Directory.CreateDirectory(legacy);
         File.WriteAllBytes(Path.Combine(legacy, "old-random-name.jpg"), landscape);
-        var migration = ImageExporter.Export(new SpotlightCatalog(local), ImageSource.LockScreen, legacy);
+        var migration = ImageExporter.Export(new SpotlightCatalog(local, includeDesktopRegistry: false), ImageSource.LockScreen, legacy);
         Check(migration.Saved == 2 && migration.Duplicates == 2, "old unmodified exports are recognized without modifying them");
         Check(File.ReadAllBytes(Path.Combine(legacy, "old-random-name.jpg")).SequenceEqual(landscape), "existing exports untouched");
 
@@ -108,19 +108,33 @@ internal static class Tests
         string desktopPath = Path.Combine(iris, "999", "nested", "desktop.JPG");
         File.WriteAllBytes(desktopPath, desktop);
         File.WriteAllBytes(Path.Combine(iris, "999", "thumb.jpg"), MakeJpeg(320, 200, Color.Red));
-        var allCatalog = new SpotlightCatalog(local);
+        var allCatalog = new SpotlightCatalog(local, includeDesktopRegistry: false);
         allCatalog.ParseMetadata(Json.Serialize(new { ad = new { landscapeImage = new { asset = desktopPath }, iconHoverText = "Desktop Place\r\n© Desktop Artist", description = "Desktop description", copyright = "© Desktop Artist", ctaUri = "https://example.test/desktop" } }));
         var all = ImageExporter.Export(allCatalog, ImageSource.All, destination);
         Check(all.Saved == 1 && all.Duplicates == 5, "all sources share duplicate detection and discover nested desktop directories");
         string desktopOutput = Path.Combine(destination, "Landscape", "Desktop Place.jpg");
         Check(File.Exists(desktopOutput), "desktop registry-shaped metadata names the image");
         Check(JpegMetadata.ReadOriginalHash(File.ReadAllBytes(desktopOutput)) == JpegMetadata.Hash(desktop), "desktop hash embedded");
-        var desktopOnly = ImageExporter.Export(new SpotlightCatalog(local), ImageSource.Desktop, Path.Combine(root, "desktop-only"));
+        var desktopOnly = ImageExporter.Export(new SpotlightCatalog(local, includeDesktopRegistry: false), ImageSource.Desktop, Path.Combine(root, "desktop-only"));
         Check(desktopOnly.Saved == 2 && desktopOnly.Failed == 0, "desktop-only selection excludes lockscreen images");
         string deleted = Directory.GetFiles(destination, "*.jpg", SearchOption.AllDirectories).First(p => JpegMetadata.ReadOriginalHash(File.ReadAllBytes(p)) == JpegMetadata.Hash(portrait));
         File.Delete(deleted);
-        Check(ImageExporter.Export(new SpotlightCatalog(local), ImageSource.LockScreen, destination).Saved == 1, "deleted images can be exported again");
-        Check(ImageExporter.Export(new SpotlightCatalog(Path.Combine(root, "missing")), ImageSource.LockScreen, Path.Combine(root, "empty")).Saved == 0, "missing caches tolerated");
+        Check(ImageExporter.Export(new SpotlightCatalog(local, includeDesktopRegistry: false), ImageSource.LockScreen, destination).Saved == 1, "deleted images can be exported again");
+        Check(ImageExporter.Export(new SpotlightCatalog(Path.Combine(root, "missing"), includeDesktopRegistry: false), ImageSource.LockScreen, Path.Combine(root, "empty")).Saved == 0, "missing caches tolerated");
+        Check(ImageExporter.Export(new SpotlightCatalog(Path.Combine(root, "missing"), includeDesktopRegistry: false), ImageSource.Desktop, Path.Combine(root, "empty-desktop")).Saved == 0, "fixture desktop discovery excludes the user's registry");
+
+        string bundledPath = Path.Combine(root, "bundled.jpg");
+        File.WriteAllBytes(bundledPath, landscape);
+        var fallbackCatalog = new SpotlightCatalog(Path.Combine(root, "missing"), includeDesktopRegistry: false);
+        fallbackCatalog.ParseMetadata(Json.Serialize(new { landscapeImage = new { asset = bundledPath }, iconHoverText = "Bundled Place" }), isDefault: true);
+        var fallback = ImageExporter.Export(fallbackCatalog, ImageSource.Desktop, Path.Combine(root, "fallback"));
+        Check(fallback.Saved == 1 && fallback.Failed == 0, "desktop defaults exported when downloaded caches are missing");
+        fallbackCatalog.ParseMetadata(Json.Serialize(new { landscapeImage = new { asset = desktopPath }, iconHoverText = "Downloaded Place" }));
+        string preferredOutput = Path.Combine(root, "prefer-downloaded");
+        var preferred = ImageExporter.Export(fallbackCatalog, ImageSource.Desktop, preferredOutput);
+        Check(preferred.Saved == 1 && preferred.Failed == 0
+            && JpegMetadata.ReadOriginalHash(File.ReadAllBytes(Directory.GetFiles(preferredOutput, "*.jpg", SearchOption.AllDirectories).Single())) == JpegMetadata.Hash(desktop),
+            "downloaded desktop images take precedence over bundled defaults");
 
         string hashValue = JpegMetadata.Hash(landscape);
         Check(ImageExporter.SafeName("CON", hashValue) == "_CON", "Windows reserved device names escaped");
@@ -138,9 +152,9 @@ internal static class Tests
 
         byte[] unknown = MakeJpeg(1600, 900, Color.Purple);
         File.WriteAllBytes(Path.Combine(assets, "unknown-subject"), unknown);
-        var noMetadata = ImageExporter.Export(new SpotlightCatalog(local), ImageSource.LockScreen, destination);
+        var noMetadata = ImageExporter.Export(new SpotlightCatalog(local, includeDesktopRegistry: false), ImageSource.LockScreen, destination);
         Check(noMetadata.Saved == 1 && File.Exists(Path.Combine(destination, "Landscape", JpegMetadata.Hash(unknown) + ".jpg")), "missing metadata still exports with a stable fallback name");
-        Check(ImageExporter.Export(new SpotlightCatalog(local), ImageSource.LockScreen, destination).Saved == 0, "unnamed images also avoid duplicates");
+        Check(ImageExporter.Export(new SpotlightCatalog(local, includeDesktopRegistry: false), ImageSource.LockScreen, destination).Saved == 0, "unnamed images also avoid duplicates");
         var malformed = XmpRange(initialMetadata);
         byte[] invalidXmp = (byte[])initialMetadata.Clone();
         invalidXmp[malformed.Item2] = (byte)'!';
@@ -157,7 +171,7 @@ internal static class Tests
         CheckCli("--help", 0, "--source");
         CheckCli("--source desktop --help", 0, "--source");
         CheckCli("-O --source all --help", 0, "--source");
-        CheckCli("--version", 0, "Windows Spotlight");
+        CheckCli("--version", 0, "Windows Spotlight v2.0.0.0");
         CheckCli("--source", 1, "requires");
         CheckCli("--source bogus", 1, "requires");
         CheckCli("--bogus", 1, "Unknown option");
@@ -167,7 +181,7 @@ internal static class Tests
     {
         var catalog = new SpotlightCatalog(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
         var first = ImageExporter.Export(catalog, ImageSource.All, destination);
-        Check(first.Saved > 0 && first.Failed == 0, "real Windows caches export successfully into test workspace");
+        Check(first.Saved > 0 && first.Failed == 0, string.Format("real Windows caches export successfully into test workspace (saved: {0}, failed: {1}); --system requires accessible cached Spotlight images", first.Saved, first.Failed));
         var second = ImageExporter.Export(new SpotlightCatalog(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)), ImageSource.All, destination);
         Check(second.Saved == 0 && second.Failed == 0, "real Windows caches do not create duplicates on second run");
         string[] files = Directory.GetFiles(destination, "*.jpg", SearchOption.AllDirectories);

@@ -28,14 +28,16 @@ namespace Windows_Spotlight
     internal sealed class SpotlightCatalog
     {
         private readonly string packageRoot;
+        private readonly bool includeDesktopRegistry;
         private readonly Dictionary<string, ImageInfo> byPath = new Dictionary<string, ImageInfo>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, ImageInfo> byHash = new Dictionary<string, ImageInfo>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> desktopPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> defaultPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        internal SpotlightCatalog(string localAppData)
+        internal SpotlightCatalog(string localAppData, bool includeDesktopRegistry = true)
         {
             packageRoot = System.IO.Path.Combine(localAppData, "Packages");
+            this.includeDesktopRegistry = includeDesktopRegistry;
         }
 
         internal IEnumerable<SpotlightImage> Discover(ImageSource source)
@@ -51,7 +53,7 @@ namespace Windows_Spotlight
             if (source == ImageSource.LockScreen) yield break;
 
             foreach (string file in Files(System.IO.Path.Combine(state, "ContentManagementSDK", "Creatives", "88000326"))) ReadMetadata(file);
-            ReadDesktopRegistry();
+            if (includeDesktopRegistry) ReadDesktopRegistry();
             string iris = System.IO.Path.Combine(packageRoot, "MicrosoftWindows.Client.CBS_cw5n1h2txyewy", "LocalCache", "Microsoft", "IrisService");
             foreach (string file in Files(iris))
             {

@@ -26,7 +26,7 @@ namespace Windows_Spotlight
             Console.WriteLine("  -O, --open-folder  Open the output folder after exporting.");
             Console.WriteLine("  -V, --version      Report the tool version.");
             Console.WriteLine("  -h, --help         Show this help.\n");
-            Console.WriteLine("Project URL: https://github.com/krishna-santosh/Windows_Spotlight");
+            Console.WriteLine("Project URL: https://github.com/krishna-santosh/spotlight-images");
         }
     }
 }
